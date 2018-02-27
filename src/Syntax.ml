@@ -41,7 +41,35 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec calc binop x y = 
+        let to_bool x = if x = 0 then false else true
+        and bool_calc bool_op x y = if bool_op x y then 1 else 0
+        in
+        match binop with
+          "+" -> x + y
+        | "-" -> x - y
+        | "*" -> x * y
+        | "/" -> x / y
+        | "%" -> x mod y
+        | "<" -> bool_calc (<) x y
+        | "<=" -> bool_calc (<=) x y
+        | ">" -> bool_calc (>) x y
+        | ">=" -> bool_calc (>=) x y
+        | "==" -> bool_calc (==) x y
+        | "!=" -> bool_calc (<>) x y
+        | "&&" -> bool_calc (&&) (to_bool x) (to_bool y)
+        | "!!" -> bool_calc (||) (to_bool x) (to_bool y)
+        | _ -> failwith "Error in op: %s" binop 
+
+    let rec eval state expression = 
+        match expression with
+          Const (value) -> value
+        | Var (value) -> state value
+        | Binop (op, expr1, expr2) ->
+            let value1 = eval state expr1 
+            and value2 = eval state expr2 
+            in calc op value1 value2
+
 
   end
                     
@@ -65,7 +93,17 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ = failwith "Not implemented yet"
+    let rec eval ((s, i, o) : config) stmt =
+        match stmt with
+          Read (x) -> 
+            (match i with 
+              [] -> failwith "Empty input stream"
+            | num :: tail -> ((Expr.update x num s), tail, o))
+        | Write (expr) -> (s, i, o @ [(Expr.eval s expr)])
+        | Assign (x, expr) -> ((Expr.update x (Expr.eval s expr) s), i, o)
+        | Seq (stmt_fst, stmt_snd) -> 
+            let value_fst = eval (s, i, o) stmt_fst in
+            eval value_fst stmt_snd;;
                                                          
   end
 
