@@ -29,13 +29,13 @@ let rec eval config prg =
         match inst with
           BINOP (binop) -> 
             (match st with 
-                  y :: x :: st_end -> ((Syntax.Expr.calc binop x y) :: st_end, (s, i ,o)) 
+                  y :: x :: st_end -> ((Expr.calc binop x y) :: st_end, (s, i ,o)) 
                 | _ -> failwith "Not enough arguments for binary operation")
         | CONST (n) -> (n :: st, (s, i, o))
         | READ -> let num = List.hd i in (num :: st, (s, List.tl i, o))
         | WRITE -> let num = List.hd st in (List.tl st, (s, i, o @ [num]))
         | LD (x) -> ((s x) :: st, (s, i, o))
-        | ST (x) -> let num = List.hd st in (List.tl st, (Syntax.Expr.update x num s, i, o)) in
+        | ST (x) -> let num = List.hd st in (List.tl st, (Expr.update x num s, i, o)) in
     match prg with
       [] -> config    
     | inst :: tail -> eval (update_config inst config) tail;;
@@ -56,8 +56,8 @@ let run p i = let (_, (_, _, o)) = eval ([], (Language.Expr.empty, i, [])) p in 
    stack machine
  *)
 
-let rec compile (stmt : Syntax.Stmt.t) =
-    let rec compile_expr (expr : Syntax.Expr.t) = 
+let rec compile (stmt : Stmt.t) =
+    let rec compile_expr (expr : Expr.t) = 
         match expr with
           Const (n) -> [CONST n]
         | Var (x) -> [LD x]
