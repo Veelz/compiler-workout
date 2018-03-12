@@ -80,7 +80,108 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not yet implemented"
+let rec compile env = function
+| [] -> env, []
+| instr :: code' ->
+  let env, asm = 
+    match instr with
+    | CONST n ->
+      let s, env = env#allocate in
+      env, [Mov (L n, s)]
+    
+    | WRITE ->
+      let s, env = env#pop in
+      env, [Push s; Call "Lwrite"; Pop eax]
+    
+    | READ ->
+      let x, env = env#allocate in 
+      env, [Call "Lread"; Mov (eax, x)]
+    
+    | LD x ->
+      let s, env = (env#global x)#allocate in
+      (
+        match s with
+        | S _ -> env, [Mov (M ("global_" ^ x), eax); Mov (eax, s)]
+        | _ -> env, [Mov (M ("global_" ^ x), s)]
+      )
+    
+    | ST x ->
+      let s, env = (env#global x)#pop in
+      (
+        match s with
+        | S _ -> env, [Mov (s, eax); Mov (eax, M ("global_" ^ x))]
+        | _ -> env, [Mov (s, M ("global_" ^ x))]
+      )
+    
+    | BINOP op ->
+      let a, b, env = env#pop2 in
+      let res, env = env#allocate in      
+      let plus_minus_mult op = 
+        [
+          Mov (a, edi); Mov (b, edx);
+          Binop (op, edi, edx); Mov (edx, res)
+        ] 
+      in 
+      let div_rest op = match op with
+      | "/" -> [Mov (b, eax); Cltd; IDiv a; Mov (eax, res)]
+      | "%" -> [Mov (b, eax); Cltd; IDiv a; Mov (edx, res)]
+      | _   -> failwith ("Not div and not rest")
+      in
+      let cmp_op_to_asm_cmd op = match op with
+      | "<" -> "l"
+      | "<=" -> "le"
+      | ">"  -> "g"
+      | ">=" -> "ge"
+      | "==" -> "e"
+      | "!=" -> "ne"
+      | _ -> failwith ("Unknown cmp operation")
+      in
+      let comparsions op = 
+        [
+          Mov (a, edi);
+          Binop ("^", eax, eax);
+          Binop ("cmp", edi, b);
+          Set (cmp_op_to_asm_cmd op, "%al");
+          Mov (eax, res);
+        ]
+      in
+      let conjunction = 
+        [
+          Binop ("^", eax, eax);
+          Binop ("^", edx, edx);
+          Binop ("^", edi, edi);
+
+          Binop ("cmp", edi, a);
+          Set ("ne", "%al");
+
+          Binop ("cmp", edi, b);
+          Set ("ne", "%dl");
+
+          Binop ("&&", eax, edx); 
+          Mov (edx, res);
+        ]
+      in
+      let disjunction = 
+        [
+          Mov (a, edx);
+          Binop ("^", eax, eax);
+          Binop ("!!", b, edx);
+          Binop ("cmp", edx, eax);
+          Set ("ne", "%al");
+          Mov (eax, res);
+        ]
+      in
+      match op with 
+      | "+" | "-" | "*" -> env, plus_minus_mult op
+      | "/" | "%" -> env, div_rest op
+      | "<" | "<=" | ">" | ">=" | "==" | "!=" -> env, comparsions op
+      | "&&" -> env, conjunction
+      | "!!" -> env, disjunction
+      | _ -> failwith("Binop not supported yet")
+    | _ -> failwith("Not yet supported")
+  in 
+  let env, asm' = compile env code' in
+  env, asm @ asm'
 
 (* A set of strings *)           
 module S = Set.Make (String)
@@ -100,8 +201,8 @@ class env =
       let x, n =
 	let rec allocate' = function
 	| []                            -> ebx     , 0
-	| (S n)::_                      -> S (n+1) , n+1
-	| (R n)::_ when n < num_of_regs -> R (n+1) , stack_slots
+	| (S n)::_                      -> S (n+1) , n+2
+	| (R n)::_ when n+1 < num_of_regs -> R (n+1) , stack_slots
 	| _                             -> S 0     , 1
 	in
 	allocate' stack
