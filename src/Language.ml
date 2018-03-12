@@ -6,6 +6,7 @@ open List
 
 (* Opening a library for combinator-based syntax analysis *)
 open Ostap.Combinators
+open Ostap
        
 (* Simple expressions: syntax and semantics *)
 module Expr =
@@ -81,16 +82,16 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
    
     *)
-    let parser_binop_list ops = List.map(fun op -> ((ostap ($(op))), fun a b -> Binop(op, a, b))) ops
+    let parser_binop_list ops = List.map(fun op -> (ostap ($(op)), fun a b -> Binop(op, a, b))) ops
 
     ostap (
       parse: 
-       !(Ostap.Util.expr
+       !(Util.expr
           (fun x -> x)
           [|
             `Lefta, parser_binop_list ["!!"];
             `Lefta, parser_binop_list ["&&"];
-            `Nona,  parser_binop_list [">"; ">="; "<"; "<="; "=="; "!="];
+            `Nona,  parser_binop_list ["<="; ">="; "<"; ">"; "=="; "!="];
             `Lefta, parser_binop_list ["+"; "-"];
             `Lefta, parser_binop_list ["*"; "/"; "%"]
           |]
@@ -147,9 +148,9 @@ module Stmt =
           primary
       );
       primary: 
-          "read" "(" x:IDENT ")"          {Read  x}
-        | "write" "(" e:!(Expr.parse) ")" {Write e}
-        | x:IDENT ":=" e:!(Expr.parse)    {Assign(x, e)}
+          -"read" -"(" x:IDENT -")"          {Read  x}
+        | -"write" -"(" e:!(Expr.parse) -")" {Write e}
+        | x:IDENT -":=" e:!(Expr.parse)      {Assign(x, e)}
     )
 
   end
