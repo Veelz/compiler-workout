@@ -86,7 +86,77 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code = failwith "Not yet implemented"
+let inMemory x = match x with
+  | S _ -> true
+  | M _ -> true
+  | _ -> false
+
+let movWithMemoryCheck a b = if inMemory a && inMemory b then [Mov(a, eax); Mov(eax, b)] else [Mov(a, b)]
+
+let compileBinaryOperation op a b = if inMemory a && inMemory b then [Mov (b, eax); Binop (op, a, eax); Mov (eax, b)] else [Binop (op, a, b)]
+
+let getCompareOperationSuffix op = match op with
+  | "<" -> "l"
+  | ">" -> "g"
+  | "<=" -> "le"
+  | ">=" -> "ge"
+  | "==" -> "e"
+  | "!=" -> "ne"
+
+let getDivideRegister op = match op with
+  | "/" -> eax
+  | "%" -> edx
+
+let compileBinop env op =  let oper1, oper2, updatedEnv = env#pop2 in
+  let res, updatedEnv = updatedEnv#allocate in
+  let asmInstructions = match op with
+    | "+" | "-" | "*" -> (compileBinaryOperation op oper1 oper2) @ (movWithMemoryCheck oper2 res)
+    | "&&" | "!!" -> [Mov (L 0, eax); Mov (L 0, edx);
+                      Binop ("cmp", L 0, oper1); Set ("nz", "%al"); 
+                      Binop ("cmp", L 0, oper2); Set ("nz", "%dl"); 
+                      Binop (op, eax, edx); Mov (edx, res)]
+    | "<" | ">" | "<=" | ">=" | "==" | "!=" -> let suffix = getCompareOperationSuffix op
+      in (compileBinaryOperation "cmp" oper1 oper2) @ [Mov (L 0, eax); Set (suffix, "%al"); Mov (eax, res)]
+    | "/" | "%" -> let divideRegister = getDivideRegister op
+      in [Mov (oper2, eax); Cltd; IDiv oper1; Mov (divideRegister, res)]
+    in updatedEnv, asmInstructions
+
+let compileSingleOperation env oper = match oper with
+  | CONST n -> 
+    let s, updatedEnv = env#allocate in 
+    let asmInstructions = [Mov (L n, s)]
+    in updatedEnv, asmInstructions
+  | READ -> 
+    let s, updatedEnv = env#allocate in 
+    let asmInstructions = [Call "Lread"; Mov (eax, s)]
+    in updatedEnv, asmInstructions 
+  | WRITE -> 
+    let s, updatedEnv = env#pop in 
+    let asmInstructions = [Push s; Call "Lwrite"; Pop eax]
+    in updatedEnv, asmInstructions
+  | LD x -> 
+    let s, updatedEnv = (env#global x)#allocate in
+    let mem = M (updatedEnv#loc x) in
+    let asmInstructions = movWithMemoryCheck mem s
+    in updatedEnv, asmInstructions   
+  | ST x -> 
+    let s, updatedEnv = (env#global x)#pop in
+    let mem = M (updatedEnv#loc x) in
+    let asmInstructions = movWithMemoryCheck s mem
+    in updatedEnv, asmInstructions
+  | BINOP op -> compileBinop env op
+  | LABEL label -> env, [Label label]
+  | JMP label -> env, [Jmp label]
+  | CJMP (condition, label) -> 
+    let s, updatedEnv = env#pop in
+    let asmInstructions = [Binop ("cmp", L 0, s); CJmp (condition, label)]
+    in updatedEnv, asmInstructions
+
+let rec compile env code = match code with
+  | headInstruction::tailCode -> 
+    let updatedEnv, instruction = compileSingleOperation env headInstruction in
+    let resultEnv, instructions = compile updatedEnv tailCode in resultEnv, instruction @ instructions
+  | [] -> env, []
 
 (* A set of strings *)           
 module S = Set.Make (String)
