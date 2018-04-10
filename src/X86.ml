@@ -86,114 +86,77 @@ open SM
    Take an environment, a stack machine program, and returns a pair --- the updated environment and the list
    of x86 instructions
 *)
-let compile env code =
-  let suffix = function
-  | "<"  -> "l"
+let inMemory x = match x with
+  | S _ -> true
+  | M _ -> true
+  | _ -> false
+
+let movWithMemoryCheck a b = if inMemory a && inMemory b then [Mov(a, eax); Mov(eax, b)] else [Mov(a, b)]
+
+let compileBinaryOperation op a b = if inMemory a && inMemory b then [Mov (b, eax); Binop (op, a, eax); Mov (eax, b)] else [Binop (op, a, b)]
+
+let getCompareOperationSuffix op = match op with
+  | "<" -> "l"
+  | ">" -> "g"
   | "<=" -> "le"
+  | ">=" -> "ge"
   | "==" -> "e"
   | "!=" -> "ne"
-  | ">=" -> "ge"
-  | ">"  -> "g"
-  | _    -> failwith "unknown operator"	
-  in
-  let rec compile' env scode =
-    let on_stack = function S _ -> true | _ -> false in
-    match scode with
-    | [] -> env, []
-    | instr :: scode' ->
-        let env', code' =
-          match instr with
-          | READ ->
-             let s, env' = env#allocate in
-             (env', [Call "Lread"; Mov (eax, s)])               
-          | WRITE ->
-             let s, env' = env#pop in
-             (env', [Push s; Call "Lwrite"; Pop eax])
-  	  | CONST n ->
-             let s, env' = env#allocate in
-	     (env', [Mov (L n, s)])               
-	  | LD x ->
-             let s, env' = (env#global x)#allocate in
-             env',
-	     (match s with
-	      | S _ | M _ -> [Mov (M (env'#loc x), eax); Mov (eax, s)]
-	      | _         -> [Mov (M (env'#loc x), s)]
-	     )	        
-	  | ST x ->
-	     let s, env' = (env#global x)#pop in
-             env',
-             (match s with
-              | S _ | M _ -> [Mov (s, eax); Mov (eax, M (env'#loc x))]
-              | _         -> [Mov (s, M (env'#loc x))]
-	     )
-          | BINOP op ->
-	     let x, y, env' = env#pop2 in
-             env'#push y,
-             (match op with
-	      | "/" | "%" ->
-                 [Mov (y, eax);
-                  Cltd;
-                  IDiv x;
-                  Mov ((match op with "/" -> eax | _ -> edx), y)
-                 ]
-              | "<" | "<=" | "==" | "!=" | ">=" | ">" ->
-                 (match x with
-                  | M _ | S _ ->
-                     [Binop ("^", eax, eax);
-                      Mov   (x, edx);
-                      Binop ("cmp", edx, y);
-                      Set   (suffix op, "%al");
-                      Mov   (eax, y)
-                     ]
-                  | _ ->
-                     [Binop ("^"  , eax, eax);
-                      Binop ("cmp", x, y);
-                      Set   (suffix op, "%al");
-                      Mov   (eax, y)
-                     ]
-                 )
-              | "*" ->
-                 if on_stack x && on_stack y 
-		 then [Mov (y, eax); Binop (op, x, eax); Mov (eax, y)]
-                 else [Binop (op, x, y)]
-	      | "&&" ->
-		 [Mov   (x, eax);
-		  Binop (op, x, eax);
-		  Mov   (L 0, eax);
-		  Set   ("ne", "%al");
-                  
-		  Mov   (y, edx);
-		  Binop (op, y, edx);
-		  Mov   (L 0, edx);
-		  Set   ("ne", "%dl");
-                  
-                  Binop (op, edx, eax);
-		  Set   ("ne", "%al");
-                  
-		  Mov   (eax, y)
-                 ]		   
-	      | "!!" ->
-		 [Mov   (y, eax);
-		  Binop (op, x, eax);
-                  Mov   (L 0, eax);
-		  Set   ("ne", "%al");
-		  Mov   (eax, y)
-                 ]		   
-	      | _   ->
-                 if on_stack x && on_stack y 
-                 then [Mov   (x, eax); Binop (op, eax, y)]
-                 else [Binop (op, x, y)]
-             )
-          | LABEL s     -> env, [Label s]
-	  | JMP   l     -> env, [Jmp l]
-          | CJMP (s, l) ->
-              let x, env = env#pop in
-              env, [Binop ("cmp", L 0, x); CJmp  (s, l)]
-        in
-        let env'', code'' = compile' env' scode' in
-	env'', code' @ code''
-  in
-  compile' env code
+
+let getDivideRegister op = match op with
+  | "/" -> eax
+  | "%" -> edx
+
+let compileBinop env op =  let oper1, oper2, updatedEnv = env#pop2 in
+  let res, updatedEnv = updatedEnv#allocate in
+  let asmInstructions = match op with
+    | "+" | "-" | "*" -> (compileBinaryOperation op oper1 oper2) @ (movWithMemoryCheck oper2 res)
+    | "&&" | "!!" -> [Mov (L 0, eax); Mov (L 0, edx);
+                      Binop ("cmp", L 0, oper1); Set ("nz", "%al"); 
+                      Binop ("cmp", L 0, oper2); Set ("nz", "%dl"); 
+                      Binop (op, eax, edx); Mov (edx, res)]
+    | "<" | ">" | "<=" | ">=" | "==" | "!=" -> let suffix = getCompareOperationSuffix op
+      in (compileBinaryOperation "cmp" oper1 oper2) @ [Mov (L 0, eax); Set (suffix, "%al"); Mov (eax, res)]
+    | "/" | "%" -> let divideRegister = getDivideRegister op
+      in [Mov (oper2, eax); Cltd; IDiv oper1; Mov (divideRegister, res)]
+    in updatedEnv, asmInstructions
+
+let compileSingleOperation env oper = match oper with
+  | CONST n -> 
+    let s, updatedEnv = env#allocate in 
+    let asmInstructions = [Mov (L n, s)]
+    in updatedEnv, asmInstructions
+  | READ -> 
+    let s, updatedEnv = env#allocate in 
+    let asmInstructions = [Call "Lread"; Mov (eax, s)]
+    in updatedEnv, asmInstructions 
+  | WRITE -> 
+    let s, updatedEnv = env#pop in 
+    let asmInstructions = [Push s; Call "Lwrite"; Pop eax]
+    in updatedEnv, asmInstructions
+  | LD x -> 
+    let s, updatedEnv = (env#global x)#allocate in
+    let mem = M (updatedEnv#loc x) in
+    let asmInstructions = movWithMemoryCheck mem s
+    in updatedEnv, asmInstructions   
+  | ST x -> 
+    let s, updatedEnv = (env#global x)#pop in
+    let mem = M (updatedEnv#loc x) in
+    let asmInstructions = movWithMemoryCheck s mem
+    in updatedEnv, asmInstructions
+  | BINOP op -> compileBinop env op
+  | LABEL label -> env, [Label label]
+  | JMP label -> env, [Jmp label]
+  | CJMP (condition, label) -> 
+    let s, updatedEnv = env#pop in
+    let asmInstructions = [Binop ("cmp", L 0, s); CJmp (condition, label)]
+    in updatedEnv, asmInstructions
+
+let rec compile env code = match code with
+  | headInstruction::tailCode -> 
+    let updatedEnv, instruction = compileSingleOperation env headInstruction in
+    let resultEnv, instructions = compile updatedEnv tailCode in resultEnv, instruction @ instructions
+  | [] -> env, []
 
 (* A set of strings *)           
 module S = Set.Make (String)
