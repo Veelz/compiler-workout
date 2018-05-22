@@ -83,6 +83,23 @@ let show instr =
 (* Opening stack machine to use instructions without fully qualified names *)
 open SM
 
+let charToInt c = match c with
+  | c when c <= 'Z' -> Char.code c - 64
+  | '_' -> 53
+  | c -> Char.code c - 70
+
+let rec computeInt tag tagLength acc ind = 
+  if (ind >= tagLength) then
+    acc
+  else
+    computeInt tag tagLength ((acc lsl 6) lor charToInt tag.[ind]) (ind + 1)  
+
+let tagToInt tag = 
+  let tagLength = String.length tag in
+  let subTag = String.sub tag 0 (if tagLength < 5 then tagLength else 5) in
+  computeInt subTag tagLength 0 0
+
+
 (* Symbolic stack machine evaluator
 
      compile : env -> prg -> env * instr list
@@ -145,6 +162,9 @@ let compile env code =
              let l, env = env#allocate in
              let env, call = call env ".string" 1 false in
              (env, Mov (M ("$" ^ s), l) :: call)
+
+          | SEXP (tag, ind) -> let newEnv, code = call env ".sexp" (ind + 1) true in
+            newEnv, [Push (L (tagToInt tag))] @ code
              
 	  | LD x ->
              let s, env' = (env#global x)#allocate in
@@ -264,7 +284,9 @@ module S = Set.Make (String)
 module M = Map.Make (String)
 
 (* Environment implementation *)
-let make_assoc l = List.combine l (List.init (List.length l) (fun x -> x))
+let rec listInit i n f = if i >= n then [] else (f i) :: (listInit (i + 1) n f)
+
+let make_assoc l = List.combine l (listInit 0 (List.length l) (fun x -> x))
                      
 class env =
   object (self)
